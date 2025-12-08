@@ -381,6 +381,8 @@ Video:[FinalProjectVideoo.mp4](https://drive.google.com/file/d/14OEicxZVhBAQdAEK
 
 ![p2](./images/p2.jpg)
 
+![p3](./images/p3.jpg)
+
 ### 3. Results
 
 The smart chair successfully integrates all major sensing, processing, and feedback components.
@@ -400,7 +402,7 @@ Overall, the final prototype works as planned. It can detect posture correctly, 
 | SRS-05 | The ESP shall transmit posture and sitting-time data via UART.                                                                                                                                                                                                                                      | Verified. Posture classification results and sitting-time data were transmitted from ATmega to the ESP module over UART at the configured baud rate. Serial logs show consistent, error-free packet transfer.                                                                                              |
 | SRS-06 | The system shall communicate with one RTC over I²C to get the time data.                                                                                                                                                                                                                           | Verified. The RTC (DS1307) communicated with the MCU via I²C. Time data (hours, minutes, seconds) were read correctly, and repeated reads showed stable and accurate timestamps.                                                                                                                         |
 
-SRS-02, SRS-06:![02](./Images/srs1.jpg)
+SRS-02, SRS-06:![02](./images/srs1.jpg)
 
 SRS-04, SRS-05: ![04](./images/srs2.jpg)
 
