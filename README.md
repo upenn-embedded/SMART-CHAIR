@@ -437,4 +437,84 @@ Reflect on your project. Some questions to address:
 
 ## References
 
-Fill in your references here as you work on your final project. Describe any libraries used here.
+We split our firmware into two main parts: the ATmega328PB node (sensing + posture logic) and the ESP32 node (audio playback). Below we summarize the libraries and modules we used on each side.
+
+**ATmega328PB firmware**
+
+* **AVR standard headers**
+
+  * avr/io.h, avr/interrupt.h, util/delay.h
+
+    These are the core AVR-GCC headers. We use them for direct register access (GPIO, timers, TWI, USART), enabling/disabling interrupts, and implementing short blocking delays.
+* **UART driver (UART.c/.h)**
+
+  Our own driver around USART0/USART1. It provides:
+
+  * UART0_Init(), UART0_SendString() for debugging over serial to the PC.
+  * UART1_Init(), UART1_SendChar() to send single-character commands ('a' = start music, 'b' = stop music) to the ESP32 over UART.
+* **TWI / I²C driver (twi.c/.h)**
+
+  Custom blocking I²C driver using the ATmega TWI hardware (TWBR0, TWSR0, TWCR0, etc.).
+
+  We expose simple APIs like twi_init(), twi_start(), twi_write(), and twi_read_ack()/twi_read_nack(), which are then reused by the RTC and ToF sensor drivers.
+* **RTC DS1307 driver (rtc_ds1307.c/.h)**
+
+  Uses our TWI layer to:
+
+  * Configure the DS1307 real-time clock.
+  * Read and write time registers (in BCD).
+  * Provide a “get valid time” helper that filters out occasional I²C glitches and avoids bogus readings (like random 00:00:00).
+* **VL53 time-of-flight sensor port (vl53_port.c/.h)**
+
+  Abstraction around the VL53 sensors, including:
+
+  * XSHUT control to bring sensors in and out of reset.
+  * Changing the default I²C address 0x29 to 0x2A and 0x2B so both sensors can share the bus.
+  * Single-shot distance read in millimeters.
+  * A recovery routine (vl53_bring_to_known_state()) that reinitializes the sensors if we start seeing invalid or stuck readings.
+* **Motor control driver (MotorControl.c/.h)**
+
+  Configures a PWM channel to drive the vibration motor through a transistor stage.
+
+  We use a simple interface: MotorPWM_Init() and Motor_SetSpeedPercent() to turn the motor on/off or set intensity based on posture.
+* **Pressure sensor driver (pressureSensor.c/.h)**
+
+  Handles the pressure sensors embedded in the seat. It debounces the digital input(s) and exposes PressureSensor_IsUserPresent() so the main loop can easily check whether someone is sitting on the chair.
+
+**ESP32 firmware**
+
+On the ESP32 we handle SD-card audio playback and the I²S interface to the MAX98357A amplifier.
+
+* **Arduino core (Arduino.h)**
+
+  Provides the standard setup() / loop() structure as well as Serial and Serial1 for debugging and UART communication with the ATmega.
+* **SPI and SD libraries (SPI.h, SD.h)**
+
+  * SPI.h is used to configure the SPI bus pins (SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI)).
+  * SD.h is used to initialize the micro-SD card (SD.begin(SD_CS)) and to open the audio file (SD.open("/music.wav")) as a file stream.
+* **ESP-IDF I²S driver (driver/i2s.h)**
+
+  We use the low-level ESP32 I²S driver directly to send audio samples to the MAX98357A:
+
+  * i2s_driver_install(), i2s_set_pin(), and i2s_set_sample_rates() to configure I²S as 16-bit stereo, master-TX.
+  * i2s_write() to push PCM blocks from the WAV file to the DAC.
+  * i2s_zero_dma_buffer() to quickly silence the output when we stop playback.
+* **Custom WAV parser and player**
+
+  We wrote our own small WAV parser and playback loop:
+
+  * parseWavHeader() walks through the RIFF/WAVE chunks ("RIFF", "WAVE", "fmt ", "data") to extract:
+    * Audio format (PCM),
+    * Number of channels,
+    * Sample rate,
+    * Bits per sample,
+    * Data offset and length.
+  * playWavFile("/music.wav"):
+    * Reads chunks of raw PCM data from the SD card into a buffer.
+    * Streams the buffer to I²S using i2s_write().
+    * Monitors Serial1 for the 'b' command from the ATmega to stop playback early, close the file, and clear the DMA buffer.
+
+The ATmega328PB and ESP32 firmwares together form a simple two microcontroller system:
+
+* **ATmega side** : posture detection, user-presence tracking, time-based sitting logic, vibration feedback control, and 'a'/'b' commands over UART.
+* **ESP32 side** : file I/O from SD and real-time audio streaming over I²S to the MAX98357A amplifier, controlled via the UART commands received from the ATmega.
