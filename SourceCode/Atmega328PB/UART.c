@@ -86,7 +86,7 @@ void UART0_SendString(const char *s)
     }
 }
 
-ISR(USART_RX_vect)
+ISR(USART0_RX_vect)
 {
     char c = UDR0;  // Read received character
 
