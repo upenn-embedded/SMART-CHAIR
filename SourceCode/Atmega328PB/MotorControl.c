@@ -37,4 +37,3 @@ void Motor_SetSpeedPercent(uint8_t percent)
     uint16_t duty = (uint16_t)percent * 255 / 100;
     MotorPWM_SetDuty((uint8_t)duty);
 }
-
