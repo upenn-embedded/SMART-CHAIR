@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include "rtc_ds1307.h"
 
 static uint8_t bcd2d(uint8_t b){ return (b>>4)*10 + (b & 0x0F); }
@@ -33,4 +34,37 @@ void DS1307_SetTime(const rtc_time_t *t){
   buf[5]=d2bcd(t->mon);
   buf[6]=d2bcd(t->year);
   time_i2c_write_multi(DS1307_I2C_ADDRESS, 0x00, buf, 7);
+}
+
+rtc_time_t DS1307_GetValidTime(void)
+{
+    rtc_time_t t;
+    rtc_time_t t1;
+        while (1)
+        {
+            DS1307_GetTime(&t1);
+            DS1307_GetTime(&t);
+
+            if (t.sec > 59 || t.min > 59 || t.hour > 23) {
+                // clearly garbage, retry
+                continue;
+            }
+            bool ok = false;
+            if (t.min == t1.min) {
+                // same minute, OK if seconds didn't jump backwards or by a crazy amount
+                if (t.sec == t1.sec || t.sec == (uint8_t)(t1.sec + 1)) {
+                    ok = true;
+                }
+            } else if (t.min == (uint8_t)(t1.min + 1)) {
+                // minute advanced by exactly 1
+                if (t1.sec == 59 && t.sec <= 1) {
+                    ok = true;
+                }
+            }
+
+            if (ok) {
+                return t;
+            }
+            // otherwise: loop and read again
+        }
 }
