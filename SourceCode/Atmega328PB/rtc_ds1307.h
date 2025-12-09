@@ -15,6 +15,7 @@ void time_i2c_write_single(uint8_t device_address, uint8_t register_address, uin
 void time_i2c_write_multi (uint8_t device_address, uint8_t start_register_address, uint8_t *data_array, uint8_t data_length);
 void time_i2c_read_single (uint8_t device_address, uint8_t register_address, uint8_t *data_byte);
 void time_i2c_read_multi  (uint8_t device_address, uint8_t start_register_address, uint8_t *data_array, uint8_t data_length);
+rtc_time_t DS1307_GetValidTime(void);
 
 void DS1307_Init(void);
 void DS1307_GetTime(rtc_time_t *t);
