@@ -17,11 +17,8 @@
 void tof_gpio_init(void);
 void tof_all_shutdown(void);
 void tof_release_one(uint8_t xshut_bit);
-
 uint8_t vl53_change_address(uint8_t new7);
-
 uint8_t  vl53_init_and_start(uint8_t addr7);
-
 uint16_t vl53_read_mm(uint8_t addr7);
-
+void vl53_bring_to_known_state(uint16_t* dM, uint16_t* dR);
 #endif

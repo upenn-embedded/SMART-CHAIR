@@ -2,6 +2,7 @@
 
 #include <avr/io.h>
 #include <util/delay.h>
+#include <avr/interrupt.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -9,15 +10,17 @@
 #include "UART.h"
 #include "twi.h"
 #include "rtc_ds1307.h"
-#include "vl53_port.h"     // XSHUT_M, XSHUT_R, tof_*, vl53_*
-#include "MotorControl.h"  // MotorPWM_Init, Motor_SetSpeedPercent
+#include "vl53_port.h"
+#include "MotorControl.h" 
+#include "pressureSensor.h"
+#include "Timer.h"
 
 #define DIST_MIN_MM       30   
 #define DIST_MAX_MM       900 
 #define DIFF_THR_MM        80
 
-// Sample period is ~200 ms -> 25 samples ? 5 seconds
-#define BAD_COUNT_THRESHOLD  25
+// Sample period is ~200 ms -> 10 samples ? 2 seconds
+#define BAD_COUNT_THRESHOLD  10
 
 static void print_u8(const char *k, uint8_t v)
 {
@@ -50,51 +53,19 @@ static bool is_posture_ok(uint16_t dM, uint16_t dR)
     return true;
 }
 
-static void ToF_ReinitBoth(void)
-{
-    UART0_SendString("Reinitializing both ToF sensors...\r\n");
-
-    tof_all_shutdown();
-    _delay_ms(10);
-
-    tof_release_one(1 << XSHUT_M);
-    _delay_ms(10);
-
-    if (vl53_change_address(VL53_ADDR_M) != 0) {
-        UART0_SendString("ToF M addr change FAIL in reinit\r\n");
-    } else if (vl53_init_and_start(VL53_ADDR_M) != 0) {
-        UART0_SendString("ToF M init FAIL in reinit\r\n");
-    } else {
-        UART0_SendString("ToF M reinit OK\r\n");
-    }
-
-    tof_release_one(1 << XSHUT_R);
-    _delay_ms(10);
-
-    if (vl53_change_address(VL53_ADDR_R) != 0) {
-        UART0_SendString("ToF R addr change FAIL in reinit\r\n");
-    } else if (vl53_init_and_start(VL53_ADDR_R) != 0) {
-        UART0_SendString("ToF R init FAIL in reinit\r\n");
-    } else {
-        UART0_SendString("ToF R reinit OK\r\n");
-    }
-}
-
-
 int main(void)
 {
     UART0_Init();
     UART1_Init();          // for ESP32 (USART1)
     UART0_SendString("\r\n SYSTEM STARTS \r\n");
-
+    PressureSensor_Init();
     MotorPWM_Init();
     Motor_SetSpeedPercent(0);  // ensure motor off
-
     // ---------- I2C ----------
     twi_init(TW_FREQ_100K, 0);   // 100 kHz on TWI
-
     // ---------- RTC ----------
     DS1307_Init();
+    
     rtc_time_t newTime;
 
     // Set initial time once
@@ -149,111 +120,103 @@ int main(void)
     UART0_SendString("Both ToF sensors init OK, starting measurements...\r\n");
 
     char buf[128];
-    rtc_time_t t;
-    rtc_time_t t1;
     uint8_t bad_count = 0;
     bool motor_on = false;
+    static bool isRTCValueInvalid = false;
+    static rtc_time_t t; // Keep the last valid time in memory
+  //  Timer1_Init_200ms();
+    sei();
     while (1)
     {
-        // ---------- Read RTC ----------
-while (1)
-{
-    DS1307_GetTime(&t1);
-    DS1307_GetTime(&t);
-
-    // 1) Basic range sanity
-    if (t.sec > 59 || t.min > 59 || t.hour > 23) {
-        // clearly garbage, retry
-        continue;
-    }
-
-    // 2) Allowable transitions:
-    //    - same minute, seconds moved forward by 0 or 1
-    //    - normal minute rollover: t1.sec == 59, t.sec == 0, and minute advanced by 0 or 1
-    bool ok = false;
-
-    if (t.min == t1.min) {
-        // same minute, OK if seconds didn't jump backwards or by a crazy amount
-        if (t.sec == t1.sec || t.sec == (uint8_t)(t1.sec + 1)) {
-            ok = true;
+        bool isUserPresent = PressureSensor_IsUserPresent();
+        rtc_time_t raw_t = DS1307_GetValidTime();
+        if (raw_t.hour == 0 && raw_t.min == 0 && raw_t.sec == 0)
+        {
+            UART0_SendString("[I2C Glitch Ignored]\r\n");
         }
-    } else if (t.min == (uint8_t)(t1.min + 1)) {
-        // minute advanced by exactly 1
-        if (t1.sec == 59 && t.sec <= 1) {
-            // we read across a rollover: 00:59 -> 01:00/01
-            ok = true;
+        else
+        {
+            // Read was good, update
+            t = raw_t;
         }
-    }
-
-    if (ok) {
-        break;  // t is good
-    }
-    volatile bool testt = false;
-    testt = true;
-
-    // otherwise: loop and read again
-}
-
+        do
+        {
+            if(!isUserPresent)
+            {
+                _delay_ms(300);
+                UART0_SendString("User is not sitting...\r\n"); 
+                if(motor_on)
+                {
+                    motor_on = false;
+                    Motor_SetSpeedPercent(0);   // turn off
+                }
+                // stop music
+                UART1_SendChar('b');
+                // mark RTC value as invalid
+                isRTCValueInvalid = true;
+            }
+            isUserPresent = PressureSensor_IsUserPresent();
+        }while(!isUserPresent);
         
+        if(isRTCValueInvalid)
+        {
+            UART0_SendString("Clock reset\r\n"); 
+            // reset the clock
+            rtc_time_t newTime = t; 
+            newTime.min = 0; 
+            newTime.sec = 0;
+            rtc_time_t raw_t1;
+            do
+            {
+                _delay_ms(50);
+                DS1307_SetTime(&newTime);
+                _delay_ms(50);
+                raw_t1 = DS1307_GetValidTime();
+            }while(raw_t1.sec != 0);
+            isRTCValueInvalid = false;
+            continue;
+        }
         
-        
-        if(t.min >= 1) 
-        { 
+        if(t.min >= 1 && isUserPresent && !isRTCValueInvalid)
+        {
             UART0_SendString("Starting Music for sitting too long\r\n"); 
             // start music 
             UART1_SendChar('a');
-            // reset when user gets up, for now we are just testing for 10s 
-            // Set new desired time 
-            rtc_time_t newTime = t; 
-            newTime.min = 0; 
-            newTime.sec = 0; 
-            DS1307_SetTime(&newTime); 
-            while(newTime.sec < 10) 
+            do
             {
-                UART0_SendString("user sitting\r\n"); 
-                _delay_ms(1000); 
-                DS1307_GetTime(&newTime); 
-            } 
-            newTime.sec = 0; 
-            DS1307_SetTime(&newTime);
+                UART0_SendString("Please get up..\r\n");
+                isUserPresent = PressureSensor_IsUserPresent();
+            }while(isUserPresent);
             UART0_SendString("User got up..\r\n"); 
             UART1_SendChar('b');
+            // reset when user gets up, for now we are just testing for 10s 
+            // Set new desired time 
+            UART0_SendString("Clock reset\r\n"); 
+            newTime = t; 
+            newTime.min = 0;
+            newTime.sec = 0; 
+            rtc_time_t raw_t1;
+            do
+            {
+                _delay_ms(50);
+                DS1307_SetTime(&newTime);
+                _delay_ms(50);
+                raw_t1 = DS1307_GetValidTime();
+            }while(raw_t1.min != 0);
         }
         
         print_u8("H", t.hour);
         print_u8("M", t.min);
         print_u8("S", t.sec);
 
-        uint16_t dM = vl53_read_mm(VL53_ADDR_M);
-        uint16_t dR = vl53_read_mm(VL53_ADDR_R);
-        
-        // if both sensors look dead, try reinit
-        static uint8_t both_zero_count = 0;
 
-        if ((dM == 0 || dM == 0xFFFF || dM >= 8190) &&
-            (dR == 0 || dR == 0xFFFF || dR >= 8190))
-        {
-            if (both_zero_count < 50) both_zero_count++;  // about 10 seconds at 200 ms
-        } 
-        else 
-        {
-            both_zero_count = 0;
-        }
-
-        if (both_zero_count >= 25)  // ~5 seconds of both dead
-        {
-            Motor_SetSpeedPercent(0);   // be safe, stop motor while we reset sensors
-            ToF_ReinitBoth();
-            both_zero_count = 0;
-        }
-
-
+        uint16_t dM;
+        uint16_t dR;
+        vl53_bring_to_known_state(&dM, &dR);
         bool validM = is_valid_distance(dM);
         bool validR = is_valid_distance(dR);
         bool posture_ok = is_posture_ok(dM, dR);
-
         uint16_t diff = absdiff_u16(dM, dR);
-
         snprintf(buf, sizeof(buf),
                  " M=%u%s  R=%u%s  diff=%u  posture=%s\r\n",
                  dM, validM ? "" : " (INV)",
@@ -261,7 +224,6 @@ while (1)
                  diff,
                  posture_ok ? "OK" : "BAD");
         UART0_SendString(buf);
-
         if (posture_ok) {
             bad_count = 0;
             if (motor_on) {
@@ -279,7 +241,7 @@ while (1)
                 UART1_SendChar('a');
             }
         }
-
-        _delay_ms(200);   // ~5 samples per second
+        _delay_ms(200);
+    //    Timer1_WaitFor200ms();   // ~5 samples per second
     }
 }
