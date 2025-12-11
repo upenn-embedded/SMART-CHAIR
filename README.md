@@ -518,3 +518,7 @@ The ATmega328PB and ESP32 firmwares together form a simple two microcontroller s
 
 * **ATmega side** : posture detection, user-presence tracking, time-based sitting logic, vibration feedback control, and 'a'/'b' commands over UART.
 * **ESP32 side** : file I/O from SD and real-time audio streaming over I²S to the MAX98357A amplifier, controlled via the UART commands received from the ATmega.
+
+
+COVER:
+![cover](./images/cover.jpg)
